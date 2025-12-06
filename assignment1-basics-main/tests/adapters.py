@@ -591,8 +591,11 @@ def run_train_bpe(
                 representing that <token1> was merged with <token2>.
                 Merges are ordered by order of creation.
     """
-    with open(input_path, "rb") as f:
-        file_bytes  = f.read()  # reads the entire file as a string
+    import regex as re
+    PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
+
+    with open(input_path, "r", encoding="utf-8") as f:
+        file_txt = f.read()  # reads the entire file as a string
     # print("list file bytes",list(file_bytes))
         # Split each character into a list
     # special_tokens = ["<pad>", "<eos>"]
@@ -609,54 +612,260 @@ def run_train_bpe(
     for token in special_tokens:
         vocab[next_id]=token.encode("utf-8") if isinstance(token,str) else token
         next_id+=1
+        # 4. Split on special tokens
+    escaped_tokens = [re.escape(token) for token in special_tokens]
+    if escaped_tokens:
+        pattern = "|".join(escaped_tokens)
+        chunks = re.split(pattern, file_txt)
+    else:
+        chunks = [file_txt]
+
+     # 5. Pre-tokenize and convert to byte IDs
+    all_pre_tokens = []
+    for chunk in chunks:
+        if not chunk:
+            continue
+        for match in re.finditer(PAT, chunk):
+            token_text = match.group()
+            token_bytes = token_text.encode("utf-8")
+            token_ids = [b for b in token_bytes]  # b is 0-255
+            all_pre_tokens.append(token_ids)
+    # # Map initial bytes to their token IDs
+    # byte2id = {v: k for k, v in vocab.items()}
+    # file_ids = [byte2id[bytes([b])] for b in file_bytes]
+    # byte2id = {bytes([i]): i for i in range(256)}
+    # file_ids=[byte2id[bytes([b])]  for b in file_bytes]
     # print("after add special token_vocab",vocab)
     # print ("*******************************************************")
     # print(len(vocab))
     # print("**********************************************************************")
 
     #convert the text from byes to byte list convert it into a bytes   
-    file_bytes_list = [b for b in file_bytes]
+    # file_bytes_list = [b for b in file_bytes]
 
     # file_bytes_list=[bytes([b]) for b in file_bytes]
     # print("************************************************************")
     # print("convert file into a list of characters",file_bytes_list)
     # print("************************************************************")
     merges=[]
-    while next_id < vocab_size :
-        pairs=[(file_bytes_list[i],file_bytes_list[i+1]) for i in range (len(file_bytes_list)-1)]
-        if not pairs:
-            break
-        pairs_freqs=Counter(pairs)
-        (A,B),_=pairs_freqs.most_common(1)[0]
-        # print("************************************************************")
-        # #it is a pairs of numbers
-        # print(A,B)
-        # print("************************************************************")
+    current_tokens=all_pre_tokens
+    while len(vocab) <vocab_size:
+        pair_counts=Counter()
+        for token_seq in current_tokens:
+            if len(token_seq) <2:
+                continue
+            for i in range(len(token_seq) -1):
+                pair=(token_seq[i],token_seq[i+1])
+                pair_counts[pair]+=1
 
-        # print("most_freq_pair",most_freq_pair)
-        #add new token 
-        new_token=vocab[A]+vocab[B]
-        # print("************************************************************")
-        # print("new token",new_token)
-        # print("************************************************************")
+        if not pair_counts:
+            break 
+        max_count = max(pair_counts.values())
+        best_pairs=[pair for pair ,count in pair_counts.items() if count == max_count]
+        A, B = max(best_pairs, key=lambda p: (vocab[p[0]], vocab[p[1]]))
+        # A,B =max(best_pairs)  
 
-        # new_token=bytes(most_freq_pair)
-        new_token_id=next_id
-        vocab[new_token_id]=new_token
-        merges.append((vocab[A],vocab[B]))
-        # merges.append((A,B))
-        next_id+=1
+        new_bytes=vocab[A] +vocab[B]
+        new_id=next_id
+        vocab[new_id]=new_bytes
+        merges.append((vocab[A],vocab[B]))    
 
-        #replace all the occurance of the new token with its id 
-        i=0
-        new_file_bytes_list=[]
-        while i <len(file_bytes_list):
-            if i < len(file_bytes_list)-1 and file_bytes_list[i] == A and file_bytes_list[i+1] == B:
-                new_file_bytes_list.append(new_token_id)  
-                i+=2
-            else:
-                new_file_bytes_list.append(file_bytes_list[i])
-                i+=1 
-        file_bytes_list=new_file_bytes_list
+        new_current_tokens=[]
+        for token_seq in current_tokens:
+            new_seq=[]
+            i=0
+            while i <len(token_seq) :
+                if i < len(token_seq) - 1 and token_seq[i] == A and token_seq[i+1] == B:
+                    new_seq.append(new_id)
+                    i += 2
+                else:
+                    new_seq.append(token_seq[i])
+                    i += 1
+            new_current_tokens.append(new_seq)
+
+        current_tokens=new_current_tokens
+        next_id+= 1
+
     return vocab ,merges
+
+    # while len(vocab) < vocab_size :
+    #     if len(file_ids)<2:
+    #         break
+    #     pairs=[(file_ids[i],file_ids[i+1]) for i in range (len(file_ids)-1)]
+    #     if not pairs:
+    #         break
+    #     pairs_freqs=Counter(pairs)
+    #     if not pairs_freqs:
+    #         break
+    #     # if not Counter(pairs).most_common(1):
+    #     #     break
+    #     ((A,B),_)=pairs_freqs.most_common(1)[0]
+    #     # print("************************************************************")
+    #     # #it is a pairs of numbers
+    #     # print(A,B)
+    #     # print("************************************************************")
+
+    #     # print("most_freq_pair",most_freq_pair)
+    #     #add new token 
+    #     new_token=vocab[A]+vocab[B]
+    #     # new_token=A+B
+    #     # print("************************************************************")
+    #     # print("new token",new_token)
+    #     # print("************************************************************")
+
+    #     # new_token=bytes(most_freq_pair)
+    #     new_token_id=next_id
+    #     vocab[new_token_id]=new_token
+    #     # merges.append((vocab[A],vocab[B]))
+    #     merges.append((vocab[A],vocab[B]))
+    #     # next_id+=1
+
+    #     #replace all the occurance of the new token with its id 
+    #     i=0
+    #     new_file_bytes_list=[]
+    #     while i <len(file_ids):
+    #         if( i < len(file_ids)-1 and file_ids[i] == A and file_ids[i+1] == B):
+    #         # if i < len(file_bytes_list)-1 and file_bytes_list[i] == vocab[A] and file_bytes_list[i+1] == vocab[B]:
+    #             # new_file_bytes_list.append(new_token)
+    #             new_file_bytes_list.append(new_token_id)  
+    #             i+=2
+    #         else:
+    #             new_file_bytes_list.append(file_ids[i])
+    #             i+=1 
+    #     file_ids = new_file_bytes_list
+    #     next_id += 1
+    # 
     # raise NotImplementedError
+
+# def run_train_bpe(
+#     input_path: str | os.PathLike,
+#     vocab_size: int,
+#     special_tokens: list[str],
+#     **kwargs,
+# ) -> tuple[dict[int, bytes], list[tuple[bytes, bytes]]]:
+#     from collections import Counter
+
+#     with open(input_path, "rb") as f:
+#         data = f.read()
+    
+#     print(f"DEBUG: Read {len(data)} bytes from file")
+#     print(f"DEBUG: First 20 bytes: {data[:20]}")
+    
+#     # Initialize vocabulary: bytes 0-255
+#     vocab = {i: bytes([i]) for i in range(256)}
+#     next_id = 256
+    
+#     print(f"DEBUG: Initial vocab size: {len(vocab)}")
+#     print(f"DEBUG: First vocab items: {list(vocab.items())[:5]}")
+    
+#     # Add special tokens
+#     for token in special_tokens:
+#         vocab[next_id] = token.encode('utf-8')
+#         print(f"DEBUG: Added special token: ID={next_id}, token={token.encode('utf-8')}")
+#         next_id += 1
+    
+#     # Convert data to list of token IDs (starting with single bytes)
+#     # Each byte is its own token ID initially (0-255)
+#     tokens = [b for b in data]
+    
+#     print(f"DEBUG: Initial tokens count: {len(tokens)}")
+#     print(f"DEBUG: First 20 token IDs: {tokens[:20]}")
+    
+#     merges = []
+#     iteration = 0
+    
+#     # Continue until we reach desired vocabulary size
+#     while len(vocab) < vocab_size:
+#         iteration += 1
+#         print(f"\nDEBUG: Iteration {iteration}, vocab size: {len(vocab)}, target: {vocab_size}")
+        
+#         if len(tokens) < 2:
+#             print("DEBUG: Not enough tokens to continue")
+#             break
+        
+#         # Count frequency of all adjacent pairs
+#         pairs = [(tokens[i], tokens[i+1]) for i in range(len(tokens) - 1)]
+#         print(f"DEBUG: Found {len(pairs)} pairs")
+        
+#         if not pairs:
+#             print("DEBUG: No pairs found")
+#             break
+            
+#         pair_counts = Counter(pairs)
+        
+#         # Find the most frequent pair
+#         # Use deterministic tie-breaking: sort by token IDs
+#         max_count = max(pair_counts.values())
+#         print(f"DEBUG: Max pair frequency: {max_count}")
+        
+#         # Get all pairs with max frequency
+#         best_pairs = [pair for pair, count in pair_counts.items() if count == max_count]
+#         print(f"DEBUG: Found {len(best_pairs)} pairs with max frequency")
+        
+#         # Sort for deterministic behavior (first by first token, then by second)
+#         best_pairs.sort()
+        
+#         # Get the best pair
+#         best_pair = best_pairs[0]
+#         id_a, id_b = best_pair
+        
+#         print(f"DEBUG: Selected pair: ({id_a}, {id_b})")
+        
+#         # Get the byte sequences for these tokens
+#         bytes_a = vocab[id_a]
+#         bytes_b = vocab[id_b]
+        
+#         print(f"DEBUG: Bytes for ID {id_a}: {bytes_a}")
+#         print(f"DEBUG: Bytes for ID {id_b}: {bytes_b}")
+        
+#         # Create new token
+#         new_bytes = bytes_a + bytes_b
+#         new_id = next_id
+        
+#         print(f"DEBUG: New token ID {new_id}: {new_bytes}")
+        
+#         # Add to vocabulary
+#         vocab[new_id] = new_bytes
+        
+#         # Add to merges list (as bytes tuples)
+#         merges.append((bytes_a, bytes_b))
+        
+#         # Replace all occurrences of (id_a, id_b) with new_id
+#         new_tokens = []
+#         i = 0
+#         replacements = 0
+#         while i < len(tokens):
+#             if i < len(tokens) - 1 and tokens[i] == id_a and tokens[i+1] == id_b:
+#                 new_tokens.append(new_id)
+#                 i += 2
+#                 replacements += 1
+#             else:
+#                 new_tokens.append(tokens[i])
+#                 i += 1
+        
+#         print(f"DEBUG: Made {replacements} replacements")
+#         print(f"DEBUG: Tokens before: {len(tokens)}, after: {len(new_tokens)}")
+        
+#         tokens = new_tokens
+#         next_id += 1
+    
+#     print(f"\nDEBUG: Final vocab size: {len(vocab)}")
+#     print(f"DEBUG: Number of merges: {len(merges)}")
+    
+#     # Print first 10 merges
+#     print("\nDEBUG: First 10 merges:")
+#     for i, merge in enumerate(merges[:10]):
+#         print(f"  {i}: {merge[0]} + {merge[1]}")
+    
+#     # Print vocabulary summary
+#     print(f"\nDEBUG: Vocabulary keys range: {min(vocab.keys())} to {max(vocab.keys())}")
+    
+#     # Check if special tokens are present
+#     special_token_bytes = [token.encode('utf-8') for token in special_tokens]
+#     for st in special_token_bytes:
+#         if st in vocab.values():
+#             print(f"DEBUG: Special token {st} is in vocabulary")
+#         else:
+#             print(f"DEBUG: Special token {st} is NOT in vocabulary")
+    
+#     return vocab, merges
